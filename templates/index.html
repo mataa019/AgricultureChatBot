@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crop Disease Detection Chatbot</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        #chat-container {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 400px;
+            border: 1px solid #ccc;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        #chatbox {
+            height: 400px;
+            padding: 10px;
+            overflow-y: scroll;
+            background-color: #f9f9f9;
+        }
+        .message {
+            margin: 5px 0;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px; /* Set font size to small */
+        }
+        .user-message {
+            background-color: #e0e0e0;
+            text-align: right;
+        }
+        .bot-message {
+            background-color: #8c998f; /* Set background color to deep grey */
+            color: white; /* Set text color to white for better contrast */
+            text-align: left;
+        }
+        .waiting-message {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 40px;
+        }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-left-color: #333;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+        #user-input-container {
+            display: flex;
+            border-top: 1px solid #ccc;
+            background-color: #fff;
+        }
+        #user-input {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 0;
+        }
+        #send-button, #upload-button {
+            padding: 10px;
+            border: none;
+            background-color: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        #file-input {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="chat-container">
+        <div id="chatbox"></div>
+        <div id="user-input-container">
+            <input type="text" id="user-input" placeholder="Type a message...">
+            <button id="send-button">Send</button>
+            <button id="upload-button">Upload Image</button>
+        </div>
+        <input type="file" id="file-input" name="file" accept="image/*">
+    </div>
+
+    <script>
+        const chatbox = document.getElementById('chatbox');
+        const userInput = document.getElementById('user-input');
+        const sendButton = document.getElementById('send-button');
+        const uploadButton = document.getElementById('upload-button');
+        const fileInput = document.getElementById('file-input');
+        let lastDiseaseName = '';
+        let userLocation = null;
+
+        // Get user location
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(position => {
+                userLocation = {
+                    latitude: position.coords.latitude,
+                    longitude: position.coords.longitude
+                };
+            });
+        }
+
+        sendButton.addEventListener('click', function() {
+            const message = userInput.value.trim();
+            if (message === '') {
+                return; // Do not send if the message is empty
+            }
+            addMessage(message, 'user-message');
+            userInput.value = '';
+
+            // Add waiting spinner
+            const waitingMessageId = addSpinner();
+
+            sendMessageToBot(message, waitingMessageId);
+        });
+
+        uploadButton.addEventListener('click', function() {
+            fileInput.click();
+        });
+
+        fileInput.addEventListener('change', async function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const formData = new FormData();
+                formData.append('file', file);
+
+                try {
+                    const response = await fetch('/predict', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
+                    const result = await response.json();
+                    const diseaseName = result.prediction;
+                    lastDiseaseName = diseaseName; // Store the disease name
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const imageElement = `<img src="${e.target.result}" alt="Uploaded Image" style="max-width: 100%; border-radius: 5px;">`;
+                        addMessage(`${imageElement}<br>Prediction: ${diseaseName}`, 'bot-message');
+                        const waitingMessageId = addSpinner();
+                        sendMessageToBot(`Tell me more about ${diseaseName}`, waitingMessageId);
+                    };
+                    reader.readAsDataURL(file);
+                } catch (error) {
+                    console.error('Error during prediction:', error);
+                    addMessage(`Error during prediction: ${error.message}`, 'bot-message');
+                }
+            }
+        });
+
+        async function sendMessageToBot(message, waitingMessageId) {
+            try {
+                // Include the last detected disease name in the message if it exists
+                const fullMessage = lastDiseaseName ? `${message} about ${lastDiseaseName}` : message;
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ message: fullMessage, location: userLocation })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const result = await response.json();
+                updateMessage(waitingMessageId, result.response, 'bot-message');
+            } catch (error) {
+                console.error('Error during chat:', error);
+                updateMessage(waitingMessageId, `Error during chat: ${error.message}`, 'bot-message');
+            }
+        }
+
+        function addMessage(message, className) {
+            const messageElement = document.createElement('div');
+            messageElement.innerHTML = message;
+            messageElement.classList.add('message', className);
+            chatbox.appendChild(messageElement);
+            chatbox.scrollTop = chatbox.scrollHeight;
+            return messageElement;
+        }
+
+        function addSpinner() {
+            const spinnerElement = document.createElement('div');
+            spinnerElement.classList.add('message', 'waiting-message');
+            spinnerElement.innerHTML = '<div class="spinner"></div>';
+            chatbox.appendChild(spinnerElement);
+            chatbox.scrollTop = chatbox.scrollHeight;
+            return spinnerElement;
+        }
+
+        function updateMessage(element, message, className) {
+            element.innerHTML = message;
+            element.className = `message ${className}`;
+        }
+    </script>
+</body>
+</html>
